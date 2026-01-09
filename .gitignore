@@ -1,0 +1,21 @@
+# dependências
+node_modules/
+**/node_modules/
+
+# builds (gerados no CI)
+build/
+dist/
+
+# env
+.env
+.env.*
+
+# cache / dados locais
+status-cache/
+*.db
+*.db~
+*.log
+
+# SO
+.DS_Store
+Thumbs.db

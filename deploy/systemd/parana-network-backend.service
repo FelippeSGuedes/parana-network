@@ -1,0 +1,38 @@
+# systemd unit (backend)
+# - Executa SOMENTE o artefato final (binário Linux)
+# - Configuração via variáveis de ambiente (EnvironmentFile)
+# - Sem node_modules, sem git, sem build no servidor
+
+[Unit]
+Description=Parana Network Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=parana
+Group=parana
+WorkingDirectory=/opt/parana-network/backend/current
+ExecStart=/opt/parana-network/backend/current/parana-network
+Restart=always
+RestartSec=3
+
+# Variáveis de ambiente (segredos ficam fora do repo)
+EnvironmentFile=/etc/parana-network/backend.env
+
+# Porta do backend (Nginx faz proxy para esta porta)
+Environment=PORT=4000
+
+# Hardening básico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/parana-network/shared
+
+# Logs via journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

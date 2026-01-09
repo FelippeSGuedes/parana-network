@@ -1,0 +1,39 @@
+# Exemplo de configuração do Cloudflared Tunnel
+# Substitua <TUNNEL_UUID> pelo UUID do túnel criado com
+#   cloudflared tunnel create <NAME>
+# Substitua <HOSTNAME> pelo hostname configurado no Cloudflare (ex: tunel.example.com)
+# O bloco ingress é avaliado de cima para baixo — regras mais específicas primeiro.
+
+tunnel: <TUNNEL_UUID>
+credentials-file: C:\Users\<YOUR_USER>\.cloudflared\<TUNNEL_UUID>.json
+
+ingress:
+  # se a URL pública receber /Login*, encaminha para o backend (porta 5000)
+  - hostname: <HOSTNAME>
+    path: /Login*
+    service: http://localhost:5000
+
+  # todo o restante vai para o frontend (porta 3000)
+  - hostname: <HOSTNAME>
+    service: http://localhost:3000
+
+  # fallback
+  - service: http_status:404
+
+# COMO USAR (resumo):
+# 1) Crie o túnel e copie o UUID/arquivo de credenciais:
+#    cloudflared tunnel create my-tunnel
+# 2) Crie um registro DNS apontando para o túnel (substitua <HOSTNAME>):
+#    cloudflared tunnel route dns my-tunnel <HOSTNAME>
+# 3) Edite este arquivo: substitua <TUNNEL_UUID>, <YOUR_USER>, <HOSTNAME>
+# 4) Inicie o túnel:
+#    cloudflared tunnel run my-tunnel --config .cloudflared/config.yml
+#
+# Observações:
+# - Se você não tiver um domínio/hostname configurado no Cloudflare, a opção
+#   rápida `cloudflared tunnel --url http://localhost:3000` cria uma URL pública
+#   temporária, mas NÃO permite reescrever caminhos (ou seja, /Login continuará
+#   sendo servido pelo frontend a menos que o frontend/servidor trate a rota).
+# - Para usar o comportamento acima localmente sem domínio, mantenha o servidor
+#   backend (porta 5000) capaz de servir assets de /Login ou modifique o servidor
+#   principal para encaminhar /Login para o build do Login.

@@ -1,0 +1,31 @@
+# Dependências locais
+node_modules
+Login/node_modules
+status-cache/node_modules
+
+# Builds locais (gerados)
+build
+Login/dist
+public/Login
+status-cache/data
+
+# Artefatos
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# VCS
+.git
+.gitignore
+
+# IDE
+.vscode
+
+# Env local (nunca enviar no build context)
+.env
+.env.*
+
+# Outros
+coverage

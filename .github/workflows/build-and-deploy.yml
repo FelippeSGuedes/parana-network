@@ -1,0 +1,166 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            v="${GITHUB_REF#refs/tags/}"
+          else
+            v="${GITHUB_SHA:0:12}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install Login deps
+        run: npm ci --prefix Login
+
+      - name: Build Login (Vite)
+        run: npm --prefix Login run build
+
+      - name: Copy Login build into CRA public
+        run: node scripts/copy-login-build.js
+
+      - name: Build Frontend (CRA)
+        run: npm run build
+
+      - name: Build Backend binary (pkg)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          npx pkg server.js --targets node20-linux-x64 --output dist/parana-network
+          chmod +x dist/parana-network
+
+      - name: Pack artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf artifacts
+          mkdir -p artifacts/frontend artifacts/backend
+
+          # Frontend: ONLY build/
+          rsync -a --delete build/ artifacts/frontend/
+
+          # Backend: ONLY final binary
+          install -m 0755 dist/parana-network artifacts/backend/parana-network
+
+          # Metadata for traceability
+          printf '%s\n' "${{ steps.meta.outputs.version }}" > artifacts/VERSION
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.meta.outputs.version }}
+          path: artifacts
+          retention-days: 14
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+          path: artifacts
+
+      - name: Install rsync
+        run: sudo apt-get update; sudo apt-get install -y rsync
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
+
+      - name: Add host to known_hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          PORT="${{ secrets.PROD_SSH_PORT }}"
+          if [[ -z "$PORT" ]]; then PORT="22"; fi
+          ssh-keyscan -p "$PORT" -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy artifacts (no source)
+        shell: bash
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          PROD_BASE_DIR: ${{ secrets.PROD_BASE_DIR }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          : "${PROD_HOST:?missing PROD_HOST}"
+          : "${PROD_USER:?missing PROD_USER}"
+          BASE_DIR="${PROD_BASE_DIR:-/opt/parana-network}"
+          PORT_OPT="${PROD_SSH_PORT:-22}"
+
+          SSH="ssh -p ${PORT_OPT} ${PROD_USER}@${PROD_HOST}"
+          RSYNC_FRONTEND="rsync -az --chmod=D755,F644 -e \"ssh -p ${PORT_OPT}\""
+          RSYNC_BACKEND_BIN="rsync -az --chmod=F755 -e \"ssh -p ${PORT_OPT}\""
+
+          # Create runtime-only structure (no git, no node_modules)
+          ${SSH} "sudo mkdir -p ${BASE_DIR}/frontend/releases ${BASE_DIR}/backend/releases ${BASE_DIR}/shared; sudo chown -R ${PROD_USER}:${PROD_USER} ${BASE_DIR}" 
+
+          # Upload new release dirs
+          ${SSH} "mkdir -p ${BASE_DIR}/frontend/releases/${VERSION} ${BASE_DIR}/backend/releases/${VERSION}"
+          ${RSYNC_FRONTEND} --delete artifacts/frontend/ "${PROD_USER}@${PROD_HOST}:${BASE_DIR}/frontend/releases/${VERSION}/"
+          ${RSYNC_BACKEND_BIN} artifacts/backend/parana-network "${PROD_USER}@${PROD_HOST}:${BASE_DIR}/backend/releases/${VERSION}/parana-network"
+
+          # Atomic switch via symlink
+          ${SSH} "ln -sfn ${BASE_DIR}/frontend/releases/${VERSION} ${BASE_DIR}/frontend/current"
+          ${SSH} "ln -sfn ${BASE_DIR}/backend/releases/${VERSION} ${BASE_DIR}/backend/current"
+
+          # Restart only the backend service; DO NOT touch MySQL containers
+          ${SSH} "sudo systemctl daemon-reload; sudo systemctl restart parana-network-backend"
+
+          # Reload nginx to pick up new static files (safe reload)
+          ${SSH} "sudo nginx -t; sudo systemctl reload nginx"
+
+      - name: Post-deploy info
+        run: |
+          echo "Deployed version: ${{ needs.build.outputs.version }}"
+
+# Required GitHub Secrets:
+# - PROD_HOST: IP/DNS do servidor
+# - PROD_USER: usuário SSH
+# - PROD_SSH_KEY: chave privada
+# Optional:
+# - PROD_SSH_PORT: porta SSH
+# - PROD_BASE_DIR: default /opt/parana-network

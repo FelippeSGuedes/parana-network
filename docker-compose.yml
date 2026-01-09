@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  parana-app:
+    image: ghcr.io/FelippeSGuedes/parana-network:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "4000:4000"
+    networks:
+      - parana-net
+networks:
+  parana-net:
+    driver: bridge
